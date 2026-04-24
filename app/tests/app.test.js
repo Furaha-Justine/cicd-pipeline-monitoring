@@ -31,3 +31,20 @@ describe('GET /greet/:name', () => {
     expect(res.statusCode).toBe(404);
   });
 });
+
+describe('GET /metrics', () => {
+  it('returns Prometheus metrics output', async () => {
+    const res = await request(app).get('/metrics');
+    expect(res.statusCode).toBe(200);
+    expect(res.text).toContain('http_requests_total');
+    expect(res.text).toContain('http_request_duration_seconds');
+  });
+});
+
+describe('GET /error', () => {
+  it('returns 500 for simulated error endpoint', async () => {
+    const res = await request(app).get('/error');
+    expect(res.statusCode).toBe(500);
+    expect(res.body).toHaveProperty('error');
+  });
+});

@@ -89,6 +89,49 @@ resource "aws_iam_instance_profile" "jenkins_profile" {
   role = aws_iam_role.jenkins_role.name
 }
 
+# ── IAM role for App EC2 (CloudWatch logs for Docker awslogs driver) ─────────
+resource "aws_iam_role" "app_role" {
+  name = "${var.project_name}-app-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "ec2.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+
+  tags = { Name = "${var.project_name}-app-role" }
+}
+
+resource "aws_iam_role_policy" "app_cloudwatch_logs_policy" {
+  name = "${var.project_name}-app-cloudwatch-logs-policy"
+  role = aws_iam_role.app_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:DescribeLogGroups",
+          "logs:DescribeLogStreams",
+          "logs:PutLogEvents"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_instance_profile" "app_profile" {
+  name = "${var.project_name}-app-profile"
+  role = aws_iam_role.app_role.name
+}
+
 # ── Security group: Jenkins ────────────────────────────────────────────────────
 resource "aws_security_group" "jenkins_sg" {
   name        = "${var.project_name}-jenkins-sg"
@@ -146,8 +189,58 @@ resource "aws_vpc_security_group_ingress_rule" "app_port" {
   cidr_ipv4         = "0.0.0.0/0"
 }
 
+resource "aws_vpc_security_group_ingress_rule" "app_node_exporter_from_monitoring" {
+  security_group_id            = aws_security_group.app_sg.id
+  description                  = "Node Exporter from monitoring EC2"
+  from_port                    = 9100
+  to_port                      = 9100
+  ip_protocol                  = "tcp"
+  referenced_security_group_id = aws_security_group.monitoring_sg.id
+}
+
 resource "aws_vpc_security_group_egress_rule" "app_outbound" {
   security_group_id = aws_security_group.app_sg.id
+  description       = "Allow all outbound"
+  ip_protocol       = "-1"
+  cidr_ipv4         = "0.0.0.0/0"
+}
+
+# ── Security group: Monitoring (Prometheus + Grafana) ────────────────────────
+resource "aws_security_group" "monitoring_sg" {
+  name        = "${var.project_name}-monitoring-sg"
+  description = "Monitoring server - SSH + Prometheus + Grafana"
+  tags        = { Name = "${var.project_name}-monitoring-sg" }
+}
+
+resource "aws_vpc_security_group_ingress_rule" "monitoring_ssh" {
+  security_group_id = aws_security_group.monitoring_sg.id
+  description       = "SSH"
+  from_port         = 22
+  to_port           = 22
+  ip_protocol       = "tcp"
+  cidr_ipv4         = var.admin_cidr
+}
+
+resource "aws_vpc_security_group_ingress_rule" "monitoring_prometheus" {
+  security_group_id = aws_security_group.monitoring_sg.id
+  description       = "Prometheus UI"
+  from_port         = 9090
+  to_port           = 9090
+  ip_protocol       = "tcp"
+  cidr_ipv4         = var.admin_cidr
+}
+
+resource "aws_vpc_security_group_ingress_rule" "monitoring_grafana" {
+  security_group_id = aws_security_group.monitoring_sg.id
+  description       = "Grafana UI"
+  from_port         = 3001
+  to_port           = 3001
+  ip_protocol       = "tcp"
+  cidr_ipv4         = var.admin_cidr
+}
+
+resource "aws_vpc_security_group_egress_rule" "monitoring_outbound" {
+  security_group_id = aws_security_group.monitoring_sg.id
   description       = "Allow all outbound"
   ip_protocol       = "-1"
   cidr_ipv4         = "0.0.0.0/0"
@@ -175,6 +268,7 @@ resource "aws_instance" "app" {
   instance_type          = var.app_instance_type
   key_name               = aws_key_pair.ec2_key.key_name
   vpc_security_group_ids = [aws_security_group.app_sg.id]
+  iam_instance_profile   = aws_iam_instance_profile.app_profile.name
 
   root_block_device {
     volume_size = 30
@@ -184,12 +278,28 @@ resource "aws_instance" "app" {
   tags = { Name = "${var.project_name}-app" }
 }
 
+# ── Monitoring EC2 ────────────────────────────────────────────────────────────
+resource "aws_instance" "monitoring" {
+  ami                    = data.aws_ami.amazon_linux_2023.id
+  instance_type          = var.monitoring_instance_type
+  key_name               = aws_key_pair.ec2_key.key_name
+  vpc_security_group_ids = [aws_security_group.monitoring_sg.id]
+
+  root_block_device {
+    volume_size = 30
+    volume_type = "gp3"
+  }
+
+  tags = { Name = "${var.project_name}-monitoring" }
+}
+
 # ── Ansible inventory ──────────────────────────────────────────────────────────
 resource "local_file" "ansible_inventory" {
   content = templatefile("${path.module}/inventory.tpl", {
-    jenkins_ip = aws_instance.jenkins.public_ip
-    app_ip     = aws_instance.app.public_ip
-    key_path   = abspath("${path.module}/ec2_key.pem")
+    jenkins_ip    = aws_instance.jenkins.public_ip
+    app_ip        = aws_instance.app.public_ip
+    monitoring_ip = aws_instance.monitoring.public_ip
+    key_path      = abspath("${path.module}/ec2_key.pem")
   })
   filename = "${path.module}/../ansible/inventory.ini"
 }

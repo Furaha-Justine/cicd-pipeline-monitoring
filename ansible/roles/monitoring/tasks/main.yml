@@ -1,0 +1,86 @@
+---
+- name: Ensure observability directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - /opt/observability
+    - /opt/observability/prometheus
+    - /opt/observability/grafana
+    - /opt/observability/grafana/provisioning
+    - /opt/observability/grafana/provisioning/datasources
+    - /opt/observability/grafana/provisioning/dashboards
+    - /opt/observability/grafana/dashboards
+
+- name: Build scrape target facts
+  ansible.builtin.set_fact:
+    app_target_host: "{{ hostvars[groups['app_servers'][0]].ansible_default_ipv4.address | default(groups['app_servers'][0]) }}"
+
+- name: Render Prometheus config for EC2 monitoring host
+  ansible.builtin.template:
+    src: prometheus.ec2.yml.j2
+    dest: /opt/observability/prometheus/prometheus.yml
+    mode: '0644'
+
+- name: Render Prometheus alert rules
+  ansible.builtin.template:
+    src: alert.rules.yml.j2
+    dest: /opt/observability/prometheus/alert.rules.yml
+    mode: '0644'
+
+- name: Render Grafana Prometheus datasource provisioning
+  ansible.builtin.template:
+    src: grafana-datasource.yml.j2
+    dest: /opt/observability/grafana/provisioning/datasources/prometheus.yml
+    mode: '0644'
+
+- name: Render Grafana dashboards provider provisioning
+  ansible.builtin.template:
+    src: grafana-dashboards.yml.j2
+    dest: /opt/observability/grafana/provisioning/dashboards/dashboards.yml
+    mode: '0644'
+
+- name: Copy Grafana dashboard JSON to monitoring host
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../observability/grafana-dashboard-provisioned.json"
+    dest: /opt/observability/grafana/dashboards/grafana-dashboard.json
+    mode: '0644'
+
+- name: Run Prometheus container
+  ansible.builtin.shell: |
+    docker rm -f prometheus 2>/dev/null || true
+    docker run -d \
+      --name prometheus \
+      --restart unless-stopped \
+      -p 9090:9090 \
+      -v /opt/observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro \
+      -v /opt/observability/prometheus/alert.rules.yml:/etc/prometheus/alert.rules.yml:ro \
+      prom/prometheus:v2.53.0
+  changed_when: true
+
+- name: Run Grafana container
+  ansible.builtin.shell: |
+    docker rm -f grafana 2>/dev/null || true
+    docker run -d \
+      --name grafana \
+      --restart unless-stopped \
+      -p 3001:3000 \
+      -e GF_SECURITY_ADMIN_USER=admin \
+      -e GF_SECURITY_ADMIN_PASSWORD=admin123 \
+      -v /opt/observability/grafana/provisioning:/etc/grafana/provisioning:ro \
+      -v /opt/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro \
+      grafana/grafana:11.1.4
+  changed_when: true
+
+- name: Wait for Prometheus
+  ansible.builtin.wait_for:
+    port: 9090
+    delay: 5
+    timeout: 90
+
+- name: Wait for Grafana
+  ansible.builtin.wait_for:
+    port: 3001
+    delay: 5
+    timeout: 90

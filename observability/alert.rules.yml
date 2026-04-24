@@ -1,0 +1,19 @@
+groups:
+  - name: app-alerts
+    rules:
+      - alert: HighErrorRate
+        # Error rate (%) = 5xx request rate / total request rate * 100
+        expr: |
+          (
+            sum(rate(http_errors_total[1m]))
+            /
+            sum(rate(http_requests_total[1m]))
+          ) * 100 > 5
+        for: 1m
+        labels:
+          severity: warning
+          team: platform
+          service: cicd-demo-app
+        annotations:
+          summary: "High error rate detected"
+          description: "Application 5xx error rate is above 5% for 1 minute."

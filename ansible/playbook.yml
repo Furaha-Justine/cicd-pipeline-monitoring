@@ -54,3 +54,20 @@
     - name: Print App server ready
       ansible.builtin.debug:
         msg: "App EC2 ready at {{ ansible_host }}"
+
+# ── Play 4: Configure Monitoring EC2 ─────────────────────────────────────────
+- name: Configure Monitoring EC2
+  hosts: monitoring
+  become: true
+  gather_facts: true
+
+  roles:
+    - docker
+    - monitoring
+
+  post_tasks:
+    - name: Print monitoring endpoints
+      ansible.builtin.debug:
+        msg:
+          - "Prometheus ready at http://{{ ansible_host }}:9090"
+          - "Grafana ready at http://{{ ansible_host }}:3001"

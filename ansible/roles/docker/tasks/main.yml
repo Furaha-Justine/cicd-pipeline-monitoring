@@ -23,3 +23,13 @@
 - name: Verify Docker
   ansible.builtin.command: docker info
   changed_when: false
+
+- name: Run Node Exporter container
+  ansible.builtin.shell: |
+    docker rm -f node-exporter 2>/dev/null || true
+    docker run -d \
+      --name node-exporter \
+      --restart unless-stopped \
+      -p 9100:9100 \
+      prom/node-exporter:v1.8.2
+  changed_when: true

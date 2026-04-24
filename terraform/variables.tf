@@ -22,6 +22,24 @@ variable "app_instance_type" {
   default     = "t3.micro"
 }
 
+variable "monitoring_instance_type" {
+  description = "EC2 instance type for monitoring server (Prometheus + Grafana)"
+  type        = string
+  default     = "t3.small"
+}
+
+variable "admin_cidr" {
+  description = "CIDR allowed to access SSH/Prometheus/Grafana"
+  type        = string
+  default     = "0.0.0.0/0"
+}
+
+variable "cloudtrail_sse_algorithm" {
+  description = "S3 encryption algorithm for CloudTrail bucket (AES256 for SSE-S3)"
+  type        = string
+  default     = "AES256"
+}
+
 variable "app_port" {
   description = "Port the app container listens on"
   type        = number

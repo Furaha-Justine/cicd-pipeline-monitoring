@@ -11,6 +11,7 @@ pipeline {
         CONTAINER_NAME = 'cicd-demo-app'
         PROJECT_NAME   = 'cicd-demo'
         AWS_REGION     = 'eu-west-1'
+        LOG_GROUP      = '/cicd-demo/app'
     }
 
     options {
@@ -120,6 +121,7 @@ pipeline {
                        
                         writeFile file: '/tmp/deploy.sh', text: """#!/bin/bash
 set -e
+aws logs create-log-group --region ${AWS_REGION} --log-group-name ${LOG_GROUP} 2>/dev/null || true
 echo "${REG_PASS}" | docker login docker.io -u "${REG_USER}" --password-stdin
 docker pull ${FULL_IMAGE}
 docker stop ${CONTAINER_NAME} 2>/dev/null || true
@@ -129,6 +131,11 @@ docker run -d \\
     --restart unless-stopped \\
     -p ${APP_PORT}:3000 \\
     -e APP_VERSION=${IMAGE_TAG} \\
+    --log-driver=awslogs \\
+    --log-opt awslogs-region=${AWS_REGION} \\
+    --log-opt awslogs-group=${LOG_GROUP} \\
+    --log-opt awslogs-stream=${CONTAINER_NAME}-${IMAGE_TAG} \\
+    --log-opt awslogs-create-group=true \\
     ${FULL_IMAGE}
 sleep 5
 curl -sf http://localhost:${APP_PORT}/health || exit 1
