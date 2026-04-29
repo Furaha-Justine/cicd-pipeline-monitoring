@@ -41,11 +41,22 @@
     dest: /opt/observability/grafana/provisioning/dashboards/dashboards.yml
     mode: '0644'
 
-- name: Copy Grafana dashboard JSON to monitoring host
+- name: Copy Grafana App Metrics dashboard JSON to monitoring host
   ansible.builtin.copy:
     src: "{{ playbook_dir }}/../observability/grafana-dashboard-provisioned.json"
-    dest: /opt/observability/grafana/dashboards/grafana-dashboard.json
+    dest: /opt/observability/grafana/dashboards/app-metrics-dashboard.json
     mode: '0644'
+
+- name: Copy Grafana Node Exporter dashboard JSON to monitoring host
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../observability/grafana-dashboard-node-exporter.json"
+    dest: /opt/observability/grafana/dashboards/node-exporter-dashboard.json
+    mode: '0644'
+
+- name: Create shared observability Docker network
+  ansible.builtin.shell: |
+    docker network inspect observability >/dev/null 2>&1 || docker network create observability
+  changed_when: false
 
 - name: Run Prometheus container
   ansible.builtin.shell: |
@@ -53,6 +64,7 @@
     docker run -d \
       --name prometheus \
       --restart unless-stopped \
+      --network observability \
       -p 9090:9090 \
       -v /opt/observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro \
       -v /opt/observability/prometheus/alert.rules.yml:/etc/prometheus/alert.rules.yml:ro \
@@ -65,6 +77,7 @@
     docker run -d \
       --name grafana \
       --restart unless-stopped \
+      --network observability \
       -p 3001:3000 \
       -e GF_SECURITY_ADMIN_USER=admin \
       -e GF_SECURITY_ADMIN_PASSWORD=admin123 \

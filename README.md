@@ -1,196 +1,169 @@
-# CI/CD Monitoring + Security Stack (Prometheus, Grafana, AWS)
+# cicd-pipeline-monitoring — Observability & Security for a Containerized App
 
-This repository extends the existing containerized application and Jenkins CI/CD into a full observability and security implementation.
+This repository demonstrates a production-style observability and security stack for a containerized
+Node.js application. It integrates metrics, visualization, logging, and AWS security services so you
+can deploy, verify, and demonstrate a full monitoring + security workflow.
 
-## Architecture
 
-- Application container on App EC2 exposes `/metrics`.
-- Node Exporter runs on App EC2 (`:9100`).
-- Prometheus runs on Monitoring EC2 (`:9090`) and scrapes:
-  - App metrics (`app:3000/metrics`)
-  - Node Exporter (`app:9100/metrics`)
-- Grafana runs on Monitoring EC2 (`:3001`) and is auto-provisioned with:
-  - Prometheus datasource
-  - Dashboard for RPS, error rate, p95 latency
-- CloudWatch Logs receives app container logs via Docker `awslogs`.
-- CloudTrail is enabled with encrypted S3 storage and lifecycle expiration.
-- GuardDuty is enabled for managed threat detection.
 
-## Deliverables in Repo
+Overview
+--------
 
-- Prometheus config: [observability/prometheus.yml](observability/prometheus.yml)
-- Alert rules: [observability/alert.rules.yml](observability/alert.rules.yml)
-- Grafana dashboard (portable import): [observability/grafana-dashboard.json](observability/grafana-dashboard.json)
-- Grafana dashboard (auto-provisioned): [observability/grafana-dashboard-provisioned.json](observability/grafana-dashboard-provisioned.json)
-- Terraform infra + security resources: [terraform/main.tf](terraform/main.tf), [terraform/security.tf](terraform/security.tf)
-- Ansible monitoring automation: [ansible/playbook.yml](ansible/playbook.yml), [ansible/roles/monitoring/tasks/main.yml](ansible/roles/monitoring/tasks/main.yml)
-- Verification script: [scripts/verify_observability.sh](scripts/verify_observability.sh)
-- Screenshot evidence checklist: [evidence/screenshots/README.md](evidence/screenshots/README.md)
-- 2-page report: [report/observability-security-report.md](report/observability-security-report.md)
+- Purpose: Extend a containerized web app and Jenkins CI/CD with Prometheus, Grafana, CloudWatch,
+  CloudTrail, and GuardDuty to provide full observability and basic account-level security.
+- Scope: Production-like deployment across three EC2 roles — Jenkins (CI/CD), App (runtime),
+  Monitoring (Prometheus + Grafana). Docker is used to run app and monitoring components.
 
-## 1) Prerequisites
+### System Design
+   ![Script Execution](screenshots/design.png)
+Quick start (production-focused)
+-------------------------------
 
-Run locally (macOS):
+Prerequisites
 
 ```bash
 brew install terraform ansible awscli jq
+aws configure
 ```
 
-Also required:
-- Docker on EC2 hosts (installed by Ansible roles)
-- AWS credentials configured locally (`aws configure`)
+1) Populate secrets
 
-## 2) Provision AWS infrastructure (Terraform)
+```bash
+cp ansible/secrets.yml.example ansible/secrets.yml
+# Edit ansible/secrets.yml: docker_hub_user, docker_hub_token, key_path, (optional) github_token
+```
 
-From repository root:
+2) Provision infrastructure
 
 ```bash
 cd terraform
 terraform init
-terraform plan -out tfplan
-terraform apply tfplan
+terraform apply -auto-approve
+cd ..
 ```
 
-This provisions:
-- Jenkins EC2
-- App EC2
-- Monitoring EC2
-- Security groups for app, Jenkins, monitoring
-- CloudWatch log group for app logs
-- CloudTrail + encrypted S3 bucket + lifecycle rule (30 days)
-- GuardDuty detector
-
-Get outputs:
-
-```bash
-terraform output
-```
-
-## 3) Configure servers (Ansible)
-
-From repository root:
+3) Configure hosts and Jenkins
 
 ```bash
 cd ansible
 ansible-playbook -i inventory.ini playbook.yml
+ansible-playbook -i inventory.ini configure_jenkins.yml -e @secrets.yml
 ```
 
-This configures:
-- Docker on app + monitoring hosts
-- Node Exporter container on app host
-- Prometheus container on monitoring host
-- Grafana container on monitoring host
-- Auto-provisioned Grafana datasource/dashboard
+4) Run the Jenkins pipeline (job: `cicd-demo-pipeline`) from the Jenkins UI.
 
-## 4) Deploy app via Jenkins pipeline
+Operational runbook (detailed)
+-----------------------------
 
-Run Jenkins pipeline (existing flow). Deployment now includes Docker `awslogs` configuration in [Jenkinsfile](Jenkinsfile), sending container logs to CloudWatch log group `/cicd-demo/app`.
+Provisioning
 
-## 5) Access monitoring UIs
+- Terraform provisions EC2 instances (Jenkins, App, Monitoring), S3 for CloudTrail, and enables
+  GuardDuty. Outputs include public IPs used to build the Ansible inventory.
 
-Use Terraform outputs:
+Configuration
 
-- Prometheus URL: `prometheus_url`
-- Grafana URL: `grafana_url`
+- Ansible installs Docker, deploys Node Exporter on the App host, and runs Prometheus + Grafana
+  containers on the Monitoring host. It also configures Jenkins (plugins, credentials, pipeline job)
+  using `configure_jenkins.yml` and the templated Groovy script (`ansible/templates/create_credentials.groovy.j2`).
 
-Default Grafana credentials:
-- user: `admin`
-- pass: `admin123`
+CI/CD & Deployment
 
-## 6) PromQL queries
+- The `Jenkinsfile` builds, tests, packages a Docker image, pushes images to Docker Hub, and
+  deploys to the App EC2 via SSH. Deployment runs the container with `--log-driver=awslogs` so
+  container stdout/stderr stream to CloudWatch Logs.
 
-Requests/sec:
+Verification & evidence
+-----------------------
 
-```promql
-sum(rate(http_requests_total[1m]))
-```
-
-Error rate (%):
-
-```promql
-(sum(rate(http_errors_total[1m])) / sum(rate(http_requests_total[1m]))) * 100
-```
-
-Latency p95:
-
-```promql
-histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))
-```
-
-## 7) Alerting
-
-Rule file: [observability/alert.rules.yml](observability/alert.rules.yml)
-
-Condition:
-
-$$
-\left(\frac{\sum rate(http\_errors\_total[1m])}{\sum rate(http\_requests\_total[1m])}\right) \times 100 > 5
-$$
-
-for 1 minute.
-
-## 8) Verification
-
-Run automated checks:
+Automated verification (production):
 
 ```bash
-./scripts/verify_observability.sh
+PROM_URL=http://<MONITOR_IP>:9090 APP_URL=http://<APP_IP>:3000 bash scripts/verify_observability.sh
 ```
 
-Manual checks:
-
-### Prometheus targets UP
-```bash
-curl -s http://<monitoring-ec2-public-ip>:9090/api/v1/targets | jq '.data.activeTargets[] | {job: .labels.job, health: .health, endpoint: .scrapeUrl}'
-```
-
-### Simulate errors to trigger alert
-```bash
-for i in {1..200}; do curl -s -o /dev/null http://<app-ec2-public-ip>:3000/error; done
-```
+Manual checks (examples):
 
 ```bash
-curl -s http://<monitoring-ec2-public-ip>:9090/api/v1/alerts | jq '.data.alerts[] | {name: .labels.alertname, state: .state, summary: .annotations.summary}'
-```
+# Prometheus targets
+curl -s http://<MONITOR_IP>:9090/api/v1/targets | jq '.data.activeTargets[] | {job: .labels.job, health: .health}'
 
-### Confirm CloudWatch logs
-```bash
+# Prometheus queries
+curl -sG "http://<MONITOR_IP>:9090/api/v1/query" --data-urlencode 'query=sum(rate(http_requests_total[1m]))' | jq
+
+# CloudWatch logs
 aws logs describe-log-streams --log-group-name /cicd-demo/app --region eu-west-1
-```
 
-### Confirm CloudTrail events
-```bash
+# CloudTrail events
 aws cloudtrail lookup-events --max-results 10 --region eu-west-1
-```
 
-### Confirm GuardDuty detector
-```bash
+# GuardDuty detectors
 aws guardduty list-detectors --region eu-west-1
 ```
 
-## 9) Screenshots and submission evidence
+Evidence checklist (for submission)
 
-Store screenshots in [evidence/screenshots](evidence/screenshots) following [evidence/screenshots/README.md](evidence/screenshots/README.md).
+- Prometheus targets screenshot (app + node exporter UP)
+- Grafana App dashboard screenshot (RPS, error rate, p95 latency)
+- Grafana Node Exporter dashboard screenshot
+- Prometheus alert firing screenshot (HighErrorRate)
+- CloudWatch Logs screenshot showing app logs
+- CloudTrail events screenshot
+- GuardDuty detector enabled screenshot
 
-Report file: [report/observability-security-report.md](report/observability-security-report.md).
+Architecture highlights
+-----------------------
 
-## 10) Cleanup (required)
+- Metrics flow: `app:/metrics` → Prometheus (scrape) → Grafana (visualize)
+- Host metrics: Node Exporter on App EC2 → scraped by Prometheus
+- Logs flow: container stdout → Docker `awslogs` driver → CloudWatch Logs
+- Security: CloudTrail writes to encrypted S3 with lifecycle rules; GuardDuty analyzes account data and produces findings
 
-After validation and screenshots:
+Prometheus alerting example
+---------------------------
 
-```bash
-cd terraform
-terraform destroy
+Alert: `HighErrorRate` (fires when error rate &gt; 5% for 1 minute). See `observability/alert.rules.yml`.
+
+Key PromQL:
+
+```promql
+sum(rate(http_requests_total[1m]))
+
+(sum(rate(http_errors_total[1m])) / sum(rate(http_requests_total[1m]))) * 100
+
+histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))
 ```
 
-Then verify:
-- EC2 instances terminated
-- CloudTrail removed
-- GuardDuty detector removed if your policy requires teardown
-- CloudWatch log group and S3 bucket deleted
+## 📸 Screenshots
 
-## Notes
+The `screenshots/` folder contains evidence of:
 
-- This setup is production-like but intentionally simple.
-- Tighten `admin_cidr` in Terraform variables before real deployments.
-- Replace default Grafana credentials before shared/team use.
+### CloudTrail
+ ![Script Execution](screenshots/cloudtail.png)
+### CloudWatch
+   ![Script Execution](screenshots/cloudwatch.png)
+### Grafana
+   ![Script Execution](screenshots/grafana.png)
+### Prometheus
+   ![Script Execution](screenshots/prometheus.png)
+### GuardDuty
+   ![Script Execution](screenshots/guard.png)
+
+Files of interest
+-----------------
+
+- `observability/` — Prometheus and Grafana configs and dashboards
+- `ansible/` — `configure_jenkins.yml`, templates (credentials, pipeline job), monitoring role
+- `terraform/` — infra provisioning and security resources
+- `Jenkinsfile` — CI/CD pipeline
+- `scripts/verify_observability.sh` — production verification helper
+
+Troubleshooting quick tips
+-------------------------
+
+- Jenkins credentials missing: re-run `configure_jenkins.yml` with a correct `ansible/secrets.yml`.
+- Prometheus target DOWN: ensure Prometheus uses private IPs and security groups permit ports 3000/9100 from monitoring host.
+- No CloudWatch logs: confirm container was started with `--log-driver=awslogs` and correct log-group.
+
+## 👨‍💻 Author
+
+Furaha Justine
