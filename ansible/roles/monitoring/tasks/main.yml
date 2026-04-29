@@ -41,10 +41,16 @@
     dest: /opt/observability/grafana/provisioning/dashboards/dashboards.yml
     mode: '0644'
 
-- name: Copy Grafana dashboard JSON to monitoring host
+- name: Copy Grafana App Metrics dashboard JSON to monitoring host
   ansible.builtin.copy:
     src: "{{ playbook_dir }}/../observability/grafana-dashboard-provisioned.json"
-    dest: /opt/observability/grafana/dashboards/grafana-dashboard.json
+    dest: /opt/observability/grafana/dashboards/app-metrics-dashboard.json
+    mode: '0644'
+
+- name: Copy Grafana Node Exporter dashboard JSON to monitoring host
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../observability/grafana-dashboard-node-exporter.json"
+    dest: /opt/observability/grafana/dashboards/node-exporter-dashboard.json
     mode: '0644'
 
 - name: Run Prometheus container

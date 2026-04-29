@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PROM_URL="${PROM_URL:-http://localhost:9090}"
-APP_URL="${APP_URL:-http://localhost:3000}"
+if [[ -z "${PROM_URL:-}" || -z "${APP_URL:-}" ]]; then
+	echo "Error: PROM_URL and APP_URL must be set for production verification."
+	echo "Example:"
+	exit 1
+fi
 
 echo "== Targets =="
 curl -s "$PROM_URL/api/v1/targets" | jq '.data.activeTargets[] | {job: .labels.job, health: .health, scrapeUrl: .scrapeUrl}'
